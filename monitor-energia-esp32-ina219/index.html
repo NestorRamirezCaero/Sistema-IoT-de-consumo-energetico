@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Energía - INA219</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: Arial, sans-serif; background: #f2f4f7; color: #222; }
+        header { background: #1f2937; color: white; padding: 20px; text-align: center; }
+        .container { width: 95%; max-width: 1100px; margin: 25px auto; }
+        .panel { background: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .estado { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; }
+        .estado-texto { font-size: 20px; font-weight: bold; }
+        .activo { color: green; }
+        .inactivo { color: red; }
+        button { border: none; padding: 12px 20px; margin: 5px; border-radius: 6px; font-size: 15px; cursor: pointer; }
+        .btn-encender { background: #16a34a; color: white; }
+        .btn-apagar { background: #dc2626; color: white; }
+        .btn-exportar { background: #2563eb; color: white; }
+        .btn-exportar:hover { background: #1d4ed8; }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+        .panel-header h2 { margin: 0; }
+        .mediciones { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .card { background: white; padding: 20px; border-radius: 10px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .card h3 { margin: 0 0 10px; color: #555; }
+        .valor { font-size: 28px; font-weight: bold; }
+        .unidad { font-size: 15px; color: #666; }
+        .chart-container { position: relative; width: 100%; height: 350px; margin-top: 10px; }
+        .tabla-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #1f2937; color: white; }
+        th, td { padding: 10px; text-align: center; border-bottom: 1px solid #ddd; }
+        tr:nth-child(even) { background: #f8fafc; }
+        #mensaje { margin-top: 10px; font-size: 14px; }
+        .error { color: red; }
+        #consolaCruda {
+            background: #111827; color: #a7f3d0; font-family: monospace; font-size: 13px;
+            padding: 12px; border-radius: 6px; height: 160px; overflow-y: auto; white-space: pre-wrap;
+        }
+        /* Estilos para las barras de uso */
+        .contenedor-barras { display: flex; gap: 4px; justify-content: center; align-items: center; height: 22px; flex-wrap: wrap; }
+        .barra-azul     { width: 25px; height: 10px; background-color: #2563eb; border-radius: 2px; display: inline-block; }
+        .barra-amarilla { width: 25px; height: 10px; background-color: #eab308; border-radius: 2px; display: inline-block; }
+        .barra-verde    { width: 25px; height: 10px; background-color: #16a34a; border-radius: 2px; display: inline-block; }
+        .barra-roja     { width: 25px; height: 10px; background-color: #dc2626; border-radius: 2px; display: inline-block; }
+        /* Barra morada: triple de ancho (25px * 3 = 75px) */
+        .barra-morado   { width: 75px; height: 10px; background-color: #9333ea; border-radius: 2px; display: inline-block; }
+        /* Etiqueta de potencia junto a cada barra */
+        .etiqueta-potencia {
+            font-size: 11px;
+            color: #444;
+            margin-right: 8px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h1>Monitor de Energía</h1>
+    <p>ESP32 + INA219</p>
+</header>
+
+<div class="container">
+    <div class="panel">
+        <div class="estado">
+            <div>
+                Estado del ESP32:
+                <span id="estadoSensor" class="estado-texto inactivo">DESCONECTADO</span>
+            </div>
+            <div>
+                <button class="btn-encender" onclick="conectarSerial()">Conectar ESP32</button>
+                <button class="btn-apagar" onclick="desconectarSerial()">Desconectar</button>
+            </div>
+        </div>
+        <div id="mensaje">
+            Cierra el Monitor Serie del Arduino IDE, conecta el ESP32 por USB, abre esta página en Chrome o Edge y pulsa "Conectar ESP32".
+        </div>
+    </div>
+
+    <div class="mediciones">
+        <div class="card">
+            <h3>Voltaje en carga</h3>
+            <div><span id="voltaje" class="valor">0.000</span> <span class="unidad">V</span></div>
+        </div>
+        <div class="card">
+            <h3>Corriente actual</h3>
+            <div><span id="corriente" class="valor">0.00</span> <span class="unidad">mA</span></div>
+        </div>
+        <div class="card">
+            <h3>Potencia activa</h3>
+            <div><span id="potencia" class="valor">0.00</span> <span class="unidad">mW</span></div>
+        </div>
+        <div class="card">
+            <h3>Voltaje total inicial</h3>
+            <div style="margin-top: 8px;">
+                <input
+                    id="voltajeInicial"
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    placeholder="Ingresa el voltaje (V)"
+                    aria-label="Voltaje total inicial en voltios"
+                    style="width: 100%; max-width: 220px; padding: 10px; font-size: 18px; text-align: center; border: 1px solid #cbd5e1; border-radius: 6px;"
+                    oninput="actualizarVoltajeUsado()"
+                >
+                <span class="unidad">V</span>
+            </div>
+        </div>
+        <div class="card">
+            <h3>Voltaje total usado</h3>
+            <div><span id="voltajeUsado" class="valor">0.000</span> <span class="unidad">V</span></div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Voltaje y corriente en tiempo real</h2>
+        <div class="chart-container">
+            <canvas id="graficoVoltaje"></canvas>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-header">
+            <h2>Últimas 50 mediciones</h2>
+            <button class="btn-exportar" onclick="exportarCSV()">📥 Exportar a Excel (CSV)</button>
+        </div>
+        <div class="tabla-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th><th>Hora</th><th>Voltaje (V)</th><th>Corriente (mA)</th><th>Potencia (mW)</th><th>Uso</th>
+                    </tr>
+                </thead>
+                <tbody id="tablaDatos">
+                    <tr><td colspan="6">Esperando mediciones...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Datos crudos recibidos del ESP32</h2>
+        <div id="consolaCruda">(aquí aparecerá todo lo que llegue por el puerto serie)</div>
+    </div>
+</div>
+
+<script>
+let puertoSerial = null;
+let lector = null;
+let leyendo = false;
+let tareaLectura = null;
+let temporizadorSinDatos = null;
+const mediciones = [];
+let grafico = null;
+
+// ================== DEFINICIONES DE COLORES ==================
+const COLORES_CHICOS = {
+    azul:     { min: 23, max: 25 },
+    amarillo: { min: 35, max: 37 },
+    verde:    { min: 68, max: 71 },
+    rojo:     { min: 72, max: 75 }
+};
+const ORDEN_CHICOS = ['azul', 'amarillo', 'verde', 'rojo'];
+
+const MORADO = { min: 500, max: 800 };
+const TOL_CHICOS     = 2.0;
+const TOL_MORADO     = 5.0;
+const UMBRAL_APAGADO = 3.0;
+
+// Potencia intermedia de cada color chico (para entradas simultáneas)
+const INTERMEDIO = {
+    azul:     (COLORES_CHICOS.azul.min     + COLORES_CHICOS.azul.max)     / 2,
+    amarillo: (COLORES_CHICOS.amarillo.min + COLORES_CHICOS.amarillo.max) / 2,
+    verde:    (COLORES_CHICOS.verde.min    + COLORES_CHICOS.verde.max)    / 2,
+    rojo:     (COLORES_CHICOS.rojo.min     + COLORES_CHICOS.rojo.max)     / 2
+};
+
+// Nombre que aparece en el CSV para cada color interno
+const NOMBRE_CSV = {
+    azul:     'azul',
+    amarillo: 'amarillo',
+    verde:    'verde',
+    rojo:     'rojo',
+    morado:   'minimotor'
+};
+
+// Precalcular las 16 combinaciones posibles de colores chicos
+const COMBINACIONES_CHICAS = (() => {
+    const n = ORDEN_CHICOS.length;
+    const total = 1 << n; // 16
+    const lista = [];
+    for (let mask = 0; mask < total; mask++) {
+        const activos = [];
+        let sumaMin = 0, sumaMax = 0;
+        for (let i = 0; i < n; i++) {
+            if (mask & (1 << i)) {
+                const c = ORDEN_CHICOS[i];
+                activos.push(c);
+                sumaMin += COLORES_CHICOS[c].min;
+                sumaMax += COLORES_CHICOS[c].max;
+            }
+        }
+        lista.push({
+            mask, activos, sumaMin, sumaMax,
+            centro: (sumaMin + sumaMax) / 2
+        });
+    }
+    return lista;
+})();
+
+// ================== ESTADO GLOBAL ==================
+let estadoColores = {
+    activos: [],
+    azul: 0, amarillo: 0, verde: 0, rojo: 0, morado: 0
+};
+// memoriaLeds ahora guarda objetos: { color, potencia }
+let memoriaLeds = [];
+
+let lecturaPendiente = { voltaje: null, corriente: null, potencia: null };
+
+// ================== GRÁFICO ==================
+function inicializarGrafico() {
+    if (typeof Chart === "undefined") {
+        mostrarError("No se pudo cargar Chart.js (¿sin internet?). Las mediciones se mostrarán sin gráfico.");
+        return;
+    }
+    const ctx = document.getElementById('graficoVoltaje').getContext('2d');
+    grafico = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'Voltaje en carga (V)', data: [], yAxisID: 'y',
+                    borderColor: '#2563eb', borderWidth: 2, pointRadius: 2, tension: 0.2, fill: false
+                },
+                {
+                    label: 'Corriente actual (mA)', data: [], yAxisID: 'y1',
+                    borderColor: '#dc2626', borderWidth: 2, pointRadius: 2, tension: 0.2, fill: false
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                y:  { type: 'linear', position: 'left',  beginAtZero: true, title: { display: true, text: 'Voltaje (V)' } },
+                y1: { type: 'linear', position: 'right', beginAtZero: true, title: { display: true, text: 'Corriente (mA)' }, grid: { drawOnChartArea: false } },
+                x:  { title: { display: true, text: 'Hora' } }
+            },
+            animation: false
+        }
+    });
+}
+window.addEventListener('DOMContentLoaded', inicializarGrafico);
+
+// ================== CONEXIÓN SERIAL ==================
+async function conectarSerial() {
+    if (!("serial" in navigator)) {
+        mostrarError("Tu navegador no soporta Web Serial. Usa Google Chrome o Microsoft Edge de escritorio.");
+        return;
+    }
+    if (puertoSerial) {
+        mostrarMensaje("Ya hay un puerto conectado. Pulsa Desconectar primero.");
+        return;
+    }
+
+    try {
+        puertoSerial = await navigator.serial.requestPort();
+    } catch (error) {
+        mostrarError("No seleccionaste ningún puerto.");
+        return;
+    }
+
+    try {
+        await puertoSerial.open({ baudRate: 115200 });
+    } catch (error) {
+        console.error(error);
+        puertoSerial = null;
+        mostrarError("No se pudo abrir el puerto: " + error.message +
+            ". Cierra el Monitor Serie del Arduino IDE (u otro programa) que esté usando el puerto.");
+        return;
+    }
+
+    puertoSerial.addEventListener("disconnect", () => {
+        mostrarError("Se desconectó el cable USB del ESP32.");
+        limpiarConexion();
+    });
+
+    leyendo = true;
+    actualizarEstado(true);
+    mostrarMensaje("Puerto abierto. Esperando datos (el ESP32 envía una lectura cada 2 s)...");
+    iniciarVigilancia();
+    tareaLectura = leerSerial();
+}
+
+function iniciarVigilancia() {
+    clearTimeout(temporizadorSinDatos);
+    temporizadorSinDatos = setTimeout(() => {
+        if (leyendo) {
+            mostrarError("Conectado pero no llega nada en 6 s. Revisa: baudios 115200 en el sketch, que el sketch esté cargado, " +
+                         "que el INA219 esté bien cableado (SDA=21, SCL=22) y que el Monitor Serie del IDE esté cerrado. " +
+                         "Prueba pulsando el botón EN/RESET del ESP32.");
+        }
+    }, 6000);
+}
+
+async function leerSerial() {
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+        while (puertoSerial && puertoSerial.readable && leyendo) {
+            lector = puertoSerial.readable.getReader();
+            try {
+                while (leyendo) {
+                    const { value, done } = await lector.read();
+                    if (done) break;
+                    if (!value) continue;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lineas = buffer.split(/\r?\n/);
+                    buffer = lineas.pop();
+
+                    for (const linea of lineas) {
+                        const limpia = linea.trim();
+                        if (limpia.length === 0) continue;
+                        agregarCrudo(limpia);
+                        procesarLectura(limpia);
+                    }
+                }
+            } finally {
+                try { lector.releaseLock(); } catch (e) {}
+                lector = null;
+            }
+        }
+    } catch (error) {
+        console.error(error);
+        if (leyendo) mostrarError("Se perdió la conexión con el ESP32: " + error.message);
+    }
+}
+
+// ================== PARSER DEL PUERTO SERIE ==================
+function extraerNumero(linea, etiqueta) {
+    const re = new RegExp(etiqueta + "\\s*:\\s*(-?\\d+(?:[.,]\\d+)?)", "i");
+    const m = linea.match(re);
+    return m ? parseFloat(m[1].replace(",", ".")) : null;
+}
+
+function procesarLectura(linea) {
+    let v;
+
+    v = extraerNumero(linea, "Voltaje\\s+en\\s+Carga");
+    if (v !== null) lecturaPendiente.voltaje = v;
+
+    v = extraerNumero(linea, "Corriente\\s+Actual");
+    if (v !== null) lecturaPendiente.corriente = v;
+
+    v = extraerNumero(linea, "Potencia\\s+Activa");
+    if (v !== null) lecturaPendiente.potencia = v;
+
+    if (lecturaPendiente.voltaje !== null &&
+        lecturaPendiente.corriente !== null &&
+        lecturaPendiente.potencia !== null) {
+
+        registrarMedicion(lecturaPendiente);
+        lecturaPendiente = { voltaje: null, corriente: null, potencia: null };
+    }
+}
+
+// ================== CLASIFICACIÓN ==================
+function clasificarPotencia(potencia) {
+    // 1) Apagón total
+    if (potencia < UMBRAL_APAGADO) {
+        return {
+            activos: [],
+            azul: 0, amarillo: 0, verde: 0, rojo: 0, morado: 0,
+            tipo: 'apagado'
+        };
+    }
+
+    // 2) Morado exclusivo → apaga todo lo demás
+    if (potencia >= MORADO.min - TOL_MORADO && potencia <= MORADO.max + TOL_MORADO) {
+        return {
+            activos: ['morado'],
+            azul: 0, amarillo: 0, verde: 0, rojo: 0, morado: 1,
+            tipo: 'morado'
+        };
+    }
+
+    // 3) Colores chicos (16 combinaciones)
+    const candidatas = COMBINACIONES_CHICAS.filter(c =>
+        potencia >= c.sumaMin - TOL_CHICOS &&
+        potencia <= c.sumaMax + TOL_CHICOS
+    );
+
+    if (candidatas.length === 0) {
+        // Opción A: transición → mantener último estado válido
+        return {
+            activos: null,
+            tipo: 'transicion'
+        };
+    }
+
+    candidatas.sort((a, b) =>
+        Math.abs(potencia - a.centro) - Math.abs(potencia - b.centro)
+    );
+    const elegida = candidatas[0];
+
+    const estado = {
+        activos: elegida.activos,
+        azul: 0, amarillo: 0, verde: 0, rojo: 0, morado: 0,
+        tipo: 'chicos'
+    };
+    elegida.activos.forEach(c => { estado[c] = 1; });
+    return estado;
+}
+
+function actualizarEstadoLeds(potencia) {
+    const nuevo = clasificarPotencia(potencia);
+
+    // Opción A: transición → no tocar nada
+    if (nuevo.tipo === 'transicion') return;
+
+    // Apagón total → reset
+    if (nuevo.tipo === 'apagado') {
+        estadoColores = { activos: [], azul: 0, amarillo: 0, verde: 0, rojo: 0, morado: 0 };
+        memoriaLeds = [];
+        return;
+    }
+
+    // Morado → reset total, solo queda morado con la potencia REAL medida
+    if (nuevo.tipo === 'morado') {
+        estadoColores = { activos: ['morado'], azul: 0, amarillo: 0, verde: 0, rojo: 0, morado: 1 };
+        memoriaLeds = [{ color: 'morado', potencia: potencia }];
+        return;
+    }
+
+    // Colores chicos → reconciliar memoria
+    estadoColores = {
+        activos: nuevo.activos,
+        azul: nuevo.azul,
+        amarillo: nuevo.amarillo,
+        verde: nuevo.verde,
+        rojo: nuevo.rojo,
+        morado: 0
+    };
+
+    // 1) Quedarnos solo con los que siguen activos (mantienen su potencia guardada)
+    memoriaLeds = memoriaLeds.filter(item => estadoColores[item.color] === 1);
+
+    // 2) Detectar cuáles son NUEVOS (no estaban en memoria)
+    const nuevos = nuevo.activos.filter(color =>
+        !memoriaLeds.some(item => item.color === color)
+    );
+
+    if (nuevos.length === 0) return;
+
+    if (nuevos.length === 1) {
+        // Entra uno solo → potencia agregada = actual - suma guardada
+        const sumaGuardada = memoriaLeds.reduce((acc, item) => acc + item.potencia, 0);
+        const agregada = potencia - sumaGuardada;
+        memoriaLeds.push({ color: nuevos[0], potencia: agregada });
+    } else {
+        // Entran 2 o más a la vez → no se puede saber cuánto aportó cada uno
+        // → a cada uno se le asigna el valor intermedio de su rango
+        nuevos.forEach(color => {
+            memoriaLeds.push({ color, potencia: INTERMEDIO[color] });
+        });
+    }
+}
+
+// ================== REGISTRO DE MEDICIÓN ==================
+function registrarMedicion(l) {
+    clearTimeout(temporizadorSinDatos);
+    mostrarMensaje("Recibiendo mediciones del ESP32.");
+
+    actualizarEstadoLeds(l.potencia);
+
+    mediciones.push({
+        hora: new Date().toLocaleTimeString(),
+        voltaje: l.voltaje,
+        corriente: l.corriente,
+        potencia: l.potencia,
+        colores: { ...estadoColores },
+        orden: memoriaLeds.map(item => ({ color: item.color, potencia: item.potencia }))
+    });
+    if (mediciones.length > 50) mediciones.shift();
+
+    document.getElementById("voltaje").textContent = l.voltaje.toFixed(3);
+    document.getElementById("corriente").textContent = l.corriente.toFixed(2);
+    document.getElementById("potencia").textContent = l.potencia.toFixed(2);
+    actualizarVoltajeUsado();
+
+    actualizarTabla();
+    actualizarGrafico();
+}
+
+// ================== VOLTAJE USADO ==================
+function actualizarVoltajeUsado() {
+    const entrada = document.getElementById("voltajeInicial");
+    const salida = document.getElementById("voltajeUsado");
+    const voltajeInicial = entrada.value.trim();
+
+    if (voltajeInicial === "") {
+        salida.textContent = "—";
+        return;
+    }
+
+    const inicial = Number(voltajeInicial);
+    const cargaTexto = document.getElementById("voltaje").textContent;
+    const voltajeCarga = Number(cargaTexto);
+
+    if (!Number.isFinite(inicial) || !Number.isFinite(voltajeCarga)) {
+        salida.textContent = "—";
+        return;
+    }
+
+    salida.textContent = (inicial - voltajeCarga).toFixed(3);
+}
+
+// ================== CONSOLA CRUDA ==================
+function agregarCrudo(texto) {
+    const c = document.getElementById("consolaCruda");
+    if (c.dataset.vacia !== "no") { c.textContent = ""; c.dataset.vacia = "no"; }
+    c.textContent += texto + "\n";
+    const lineas = c.textContent.split("\n");
+    if (lineas.length > 200) c.textContent = lineas.slice(-100).join("\n");
+    c.scrollTop = c.scrollHeight;
+}
+
+// ================== GRÁFICO UPDATE ==================
+function actualizarGrafico() {
+    if (!grafico) return;
+    grafico.data.labels = mediciones.map(m => m.hora);
+    grafico.data.datasets[0].data = mediciones.map(m => m.voltaje);
+    grafico.data.datasets[1].data = mediciones.map(m => m.corriente);
+    grafico.update();
+}
+
+// ================== TABLA ==================
+const CLASE_BARRA = {
+    azul:     'barra-azul',
+    amarillo: 'barra-amarilla',
+    verde:    'barra-verde',
+    rojo:     'barra-roja',
+    morado:   'barra-morado'
+};
+const TITULO_COLOR = {
+    azul:     'Azul (23-25 mW)',
+    amarillo: 'Amarillo (35-37 mW)',
+    verde:    'Verde (68-71 mW)',
+    rojo:     'Rojo (72-75 mW)',
+    morado:   'Minimotor / Morado (500-800 mW)'
+};
+
+function construirBarras(dato) {
+    let html = '<div class="contenedor-barras">';
+    let impresas = 0;
+
+    dato.orden.forEach(item => {
+        const color = item.color;
+        if (dato.colores[color] === 1) {
+            html += `<span class="${CLASE_BARRA[color]}" title="${TITULO_COLOR[color]}"></span>`;
+            html += `<span class="etiqueta-potencia">${item.potencia.toFixed(1)} mW</span>`;
+            impresas++;
+        }
+    });
+
+    if (impresas === 0) {
+        html += '<span style="color:#888;font-size:12px;">—</span>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function actualizarTabla() {
+    const tabla = document.getElementById("tablaDatos");
+    tabla.innerHTML = "";
+
+    [...mediciones].reverse().forEach((dato, idx) => {
+        const htmlBarras = construirBarras(dato);
+
+        const fila = document.createElement("tr");
+        fila.innerHTML = `
+            <td>${mediciones.length - idx}</td>
+            <td>${dato.hora}</td>
+            <td>${dato.voltaje.toFixed(3)}</td>
+            <td>${dato.corriente.toFixed(2)}</td>
+            <td>${dato.potencia.toFixed(2)}</td>
+            <td>${htmlBarras}</td>
+        `;
+        tabla.appendChild(fila);
+    });
+}
+
+// ================== EXPORTAR CSV ==================
+function exportarCSV() {
+    if (mediciones.length === 0) {
+        alert("No hay mediciones para exportar.");
+        return;
+    }
+
+    let contenido = "Nro;Hora;Voltaje (V);Corriente (mA);Potencia (mW);Leds encendidos (orden con potencia)\n";
+
+    mediciones.forEach((dato, indice) => {
+        const activos = dato.orden.filter(item => dato.colores[item.color] === 1);
+        const textoUso = activos.length > 0
+            ? activos.map(item => `${NOMBRE_CSV[item.color] || item.color} (${item.potencia.toFixed(1)} mW)`).join(" -> ")
+            : "Ninguno";
+
+        contenido += `${indice + 1};"${dato.hora}";"${dato.voltaje.toFixed(3)}";"${dato.corriente.toFixed(2)}";"${dato.potencia.toFixed(2)}";"${textoUso}"\n`;
+    });
+
+    const blob = new Blob(["\uFEFF" + contenido], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const enlace = document.createElement("a");
+    enlace.setAttribute("href", url);
+    enlace.setAttribute("download", `mediciones_ina219_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(enlace);
+    enlace.click();
+    document.body.removeChild(enlace);
+}
+
+// ================== DESCONEXIÓN ==================
+async function limpiarConexion() {
+    leyendo = false;
+    clearTimeout(temporizadorSinDatos);
+    try { if (lector) await lector.cancel(); } catch (e) { console.log(e); }
+    try { if (tareaLectura) await tareaLectura; } catch (e) { console.log(e); }
+    try { if (puertoSerial) await puertoSerial.close(); } catch (e) { console.log(e); }
+
+    puertoSerial = null;
+    lector = null;
+    tareaLectura = null;
+    lecturaPendiente = { voltaje: null, corriente: null, potencia: null };
+    actualizarEstado(false);
+}
+
+async function desconectarSerial() {
+    await limpiarConexion();
+    mostrarMensaje("ESP32 desconectado.");
+}
+
+function actualizarEstado(activo) {
+    const el = document.getElementById("estadoSensor");
+    el.textContent = activo ? "CONECTADO" : "DESCONECTADO";
+    el.className = "estado-texto " + (activo ? "activo" : "inactivo");
+}
+
+function mostrarMensaje(texto) {
+    const m = document.getElementById("mensaje");
+    m.className = "";
+    m.textContent = texto;
+}
+
+function mostrarError(texto) {
+    const m = document.getElementById("mensaje");
+    m.className = "error";
+    m.textContent = texto;
+}
+</script>
+</body>
+</html>
